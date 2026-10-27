@@ -1,0 +1,12 @@
+# data and models are downloaded, not committed
+data/*.sqlite
+data/csv/
+*.gguf
+models/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/

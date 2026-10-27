@@ -1,0 +1,143 @@
+# Data dictionary for data/olist.sqlite.
+# The assistant reads this file to describe the schema and to pick the
+# business rules that apply to a question. Keywords are matched as plain
+# substrings, so they work for English and Japanese questions alike.
+
+tables:
+  orders:
+    description: One row per order placed on the Olist marketplace (Sep 2016 to Oct 2018).
+    columns:
+      order_id: Order identifier.
+      customer_id: Key to customers.customer_id. Olist creates a new customer_id for every order.
+      order_status: "One of delivered, shipped, canceled, unavailable, invoiced, processing, created, approved."
+      order_purchase_timestamp: When the customer placed the order.
+      order_approved_at: When the payment was approved.
+      order_delivered_carrier_date: When the seller handed the order to the carrier.
+      order_delivered_customer_date: When the customer received the order. NULL if not delivered.
+      order_estimated_delivery_date: Delivery date promised to the customer at purchase.
+  order_items:
+    description: One row per item in an order. An order with three items has three rows.
+    columns:
+      order_id: Key to orders.order_id.
+      order_item_id: Item number within the order (1, 2, 3, ...).
+      product_id: Key to products.product_id.
+      seller_id: Key to sellers.seller_id.
+      shipping_limit_date: Deadline for the seller to hand the item to the carrier.
+      price: Item price in Brazilian reais (BRL), without freight.
+      freight_value: Freight charged for this item in BRL.
+  payments:
+    description: One row per payment. An order can have several payments, for example a voucher plus a credit card.
+    columns:
+      order_id: Key to orders.order_id.
+      payment_sequential: Position of the payment within the order.
+      payment_type: "One of credit_card, boleto, voucher, debit_card, not_defined."
+      payment_installments: Number of installments the customer chose.
+      payment_value: Amount paid in BRL.
+  reviews:
+    description: One row per customer review. Almost every order has exactly one review.
+    columns:
+      review_id: Review identifier.
+      order_id: Key to orders.order_id.
+      review_score: Score from 1 (worst) to 5 (best).
+      review_comment_title: Optional title, in Portuguese.
+      review_comment_message: Optional comment, in Portuguese.
+      review_creation_date: When the review survey was sent.
+      review_answer_timestamp: When the customer answered.
+  customers:
+    description: One row per customer_id, which means one row per order. customer_unique_id identifies the same person across orders.
+    columns:
+      customer_id: Key used by orders.customer_id.
+      customer_unique_id: Identifies a person across all of their orders.
+      customer_zip_code_prefix: First five digits of the zip code.
+      customer_city: City name, lower case.
+      customer_state: Two-letter Brazilian state code, for example SP.
+  sellers:
+    description: One row per seller.
+    columns:
+      seller_id: Seller identifier.
+      seller_zip_code_prefix: First five digits of the zip code.
+      seller_city: City name, lower case.
+      seller_state: Two-letter Brazilian state code, for example SP.
+  products:
+    description: One row per product.
+    columns:
+      product_id: Product identifier.
+      product_category_name: Category name in Portuguese. NULL for 610 products.
+      product_name_length: Number of characters in the product name.
+      product_description_length: Number of characters in the description.
+      product_photos_qty: Number of product photos.
+      product_weight_g: Weight in grams.
+      product_length_cm: Length in centimetres.
+      product_height_cm: Height in centimetres.
+      product_width_cm: Width in centimetres.
+  category_translation:
+    description: Translates Portuguese category names to English.
+    columns:
+      product_category_name: Category name in Portuguese.
+      product_category_name_english: Category name in English, for example bed_bath_table.
+
+rules:
+  - name: dates
+    always: true
+    text: >-
+      Timestamps are TEXT in the form 'YYYY-MM-DD HH:MM:SS'. Use strftime('%Y', column) for the year
+      and strftime('%Y-%m', column) for the month. Unless the question says otherwise, an order's date
+      is order_purchase_timestamp.
+  # v2: this rule used to be always on. It leaked "100.0 *" into answers that
+  # were not percentages (average installments, median freight), so it is now
+  # added only when the question asks for a percentage or share.
+  - name: percentages
+    keywords: [percent, share, proportion, "%", "％", 割合, 率]
+    text: When the question asks for a percentage or share, return it on a 0 to 100 scale, for example 100.0 * part / total.
+  - name: delivered orders
+    keywords: [deliver, 配達, 配送, 届]
+    text: A delivered order has orders.order_status = 'delivered'.
+  - name: revenue
+    keywords: [revenue, sales, gmv, sold, 売上, 売り上げ, 販売額]
+    text: >-
+      Revenue (sales, GMV) is SUM(order_items.price). It excludes freight. Do not use
+      payments.payment_value for revenue. Include all orders unless the question limits the status.
+  - name: freight
+    keywords: [freight, shipping, 送料, 運賃]
+    text: >-
+      Freight is order_items.freight_value and is charged per item. Freight per order is
+      SUM(freight_value) over the items of that order.
+  - name: late delivery
+    keywords: [late, on time, delay, estimated, 遅, 予定]
+    text: >-
+      An order is late when order_delivered_customer_date > order_estimated_delivery_date, comparing
+      the full timestamps. Use delivered orders with a non-null order_delivered_customer_date.
+  - name: delivery time
+    keywords: [delivery time, days, how long, take to, 日数, 何日, 配達時間]
+    text: >-
+      Delivery time in days is julianday(order_delivered_customer_date) - julianday(order_purchase_timestamp),
+      for delivered orders with a non-null order_delivered_customer_date.
+  # v2: rewritten as a direct instruction. The descriptive v1 wording was ignored
+  # when a question said "unique customers".
+  - name: customers are people
+    keywords: [customer, people, person, buyer, repeat, 顧客, 購入者, リピート]
+    text: >-
+      Count customers (people) with COUNT(DISTINCT customers.customer_unique_id). Never count customers
+      with customer_id: Olist creates a new customer_id for every order. Orders link to customers through
+      orders.customer_id.
+  - name: english category names
+    keywords: [category, categories, カテゴリ]
+    text: >-
+      For category names, join products.product_category_name to category_translation.product_category_name
+      and return category_translation.product_category_name_english.
+  - name: interstate shipments
+    keywords: [interstate, intrastate, different state, same state, 州をまたぐ, 州外]
+    text: >-
+      A shipment is interstate when sellers.seller_state <> customers.customer_state. Join
+      order_items to sellers on seller_id, and orders to customers on customer_id.
+  - name: states
+    keywords: [state, 州]
+    text: customer_state and seller_state are two-letter Brazilian state codes such as SP or RJ.
+  - name: median
+    keywords: [median, 中央値]
+    text: >-
+      SQLite has no MEDIAN() function. Number the sorted values with ROW_NUMBER() and COUNT(*) OVER (),
+      then average the middle row, or the two middle rows when the count is even.
+  - name: reviews
+    keywords: [review, rating, score, star, レビュー, 評価]
+    text: Review scores are reviews.review_score from 1 to 5. Join reviews to orders on order_id.

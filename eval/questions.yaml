@@ -1,0 +1,329 @@
+# Evaluation set: 30 business questions with a reference ("gold") query each.
+# A model's answer counts as correct when its result matches the gold result
+# (see eval/compare.py). 24 questions are in English and 6 in Japanese.
+# "trap" notes the mistake the question is designed to catch.
+
+- id: q01
+  lang: en
+  difficulty: easy
+  question: How many orders are in the dataset?
+  gold_sql: SELECT COUNT(*) FROM orders
+
+- id: q02
+  lang: en
+  difficulty: easy
+  question: How many orders were delivered to customers?
+  gold_sql: SELECT COUNT(*) FROM orders WHERE order_status = 'delivered'
+
+- id: q03
+  lang: en
+  difficulty: easy
+  question: Which five seller states have the most sellers? Show each state and its number of sellers.
+  gold_sql: |
+    SELECT seller_state, COUNT(*) AS sellers
+    FROM sellers
+    GROUP BY seller_state
+    ORDER BY sellers DESC
+    LIMIT 5
+
+- id: q04
+  lang: en
+  difficulty: easy
+  question: What is the average review score?
+  gold_sql: SELECT AVG(review_score) FROM reviews
+
+- id: q05
+  lang: en
+  difficulty: easy
+  question: What percentage of order items were shipped with zero freight?
+  gold_sql: SELECT 100.0 * SUM(freight_value = 0) / COUNT(*) FROM order_items
+
+- id: q06
+  lang: en
+  difficulty: easy
+  question: What is the average number of installments for credit card payments?
+  gold_sql: SELECT AVG(payment_installments) FROM payments WHERE payment_type = 'credit_card'
+
+- id: q07
+  lang: en
+  difficulty: medium
+  question: How many unique customers have placed orders?
+  trap: customer_id changes with every order; people are counted with customer_unique_id (96,096, not 99,441).
+  gold_sql: SELECT COUNT(DISTINCT customer_unique_id) FROM customers
+
+- id: q08
+  lang: en
+  difficulty: medium
+  question: What was the total revenue from delivered orders?
+  trap: Revenue is the sum of item prices, not payments and not price plus freight.
+  gold_sql: |
+    SELECT SUM(i.price)
+    FROM order_items AS i
+    JOIN orders AS o ON o.order_id = i.order_id
+    WHERE o.order_status = 'delivered'
+
+- id: q09
+  lang: en
+  difficulty: medium
+  question: How much freight was charged in total on delivered orders?
+  gold_sql: |
+    SELECT SUM(i.freight_value)
+    FROM order_items AS i
+    JOIN orders AS o ON o.order_id = i.order_id
+    WHERE o.order_status = 'delivered'
+
+- id: q10
+  lang: en
+  difficulty: medium
+  question: Which product category, in English, has the most order items?
+  gold_sql: |
+    SELECT t.product_category_name_english
+    FROM order_items AS i
+    JOIN products AS p ON p.product_id = i.product_id
+    JOIN category_translation AS t ON t.product_category_name = p.product_category_name
+    GROUP BY t.product_category_name_english
+    ORDER BY COUNT(*) DESC
+    LIMIT 1
+
+- id: q11
+  lang: en
+  difficulty: medium
+  question: What are the top five product categories by revenue? Use the English category names.
+  gold_sql: |
+    SELECT t.product_category_name_english
+    FROM order_items AS i
+    JOIN products AS p ON p.product_id = i.product_id
+    JOIN category_translation AS t ON t.product_category_name = p.product_category_name
+    GROUP BY t.product_category_name_english
+    ORDER BY SUM(i.price) DESC
+    LIMIT 5
+
+- id: q12
+  lang: en
+  difficulty: medium
+  question: On average, how many days does it take from purchase to delivery for delivered orders?
+  gold_sql: |
+    SELECT AVG(julianday(order_delivered_customer_date) - julianday(order_purchase_timestamp))
+    FROM orders
+    WHERE order_status = 'delivered' AND order_delivered_customer_date IS NOT NULL
+
+- id: q13
+  lang: en
+  difficulty: medium
+  question: What percentage of delivered orders arrived later than the estimated delivery date?
+  gold_sql: |
+    SELECT 100.0 * SUM(order_delivered_customer_date > order_estimated_delivery_date) / COUNT(*)
+    FROM orders
+    WHERE order_status = 'delivered' AND order_delivered_customer_date IS NOT NULL
+
+- id: q14
+  lang: en
+  difficulty: medium
+  question: How many orders were placed in each year?
+  gold_sql: |
+    SELECT strftime('%Y', order_purchase_timestamp) AS year, COUNT(*) AS orders
+    FROM orders
+    GROUP BY year
+
+- id: q15
+  lang: en
+  difficulty: medium
+  question: What is the average review score of delivered orders that arrived late, compared with those that arrived on time?
+  gold_sql: |
+    SELECT AVG(r.review_score)
+    FROM orders AS o
+    JOIN reviews AS r ON r.order_id = o.order_id
+    WHERE o.order_status = 'delivered' AND o.order_delivered_customer_date IS NOT NULL
+    GROUP BY o.order_delivered_customer_date > o.order_estimated_delivery_date
+
+- id: q16
+  lang: en
+  difficulty: medium
+  question: Among customer states with at least 1,000 order items, which one has the highest average freight per item?
+  gold_sql: |
+    SELECT c.customer_state
+    FROM order_items AS i
+    JOIN orders AS o ON o.order_id = i.order_id
+    JOIN customers AS c ON c.customer_id = o.customer_id
+    GROUP BY c.customer_state
+    HAVING COUNT(*) >= 1000
+    ORDER BY AVG(i.freight_value) DESC
+    LIMIT 1
+
+- id: q17
+  lang: en
+  difficulty: medium
+  question: How many delivered orders contain items from more than one seller?
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM (
+        SELECT i.order_id
+        FROM order_items AS i
+        JOIN orders AS o ON o.order_id = i.order_id
+        WHERE o.order_status = 'delivered'
+        GROUP BY i.order_id
+        HAVING COUNT(DISTINCT i.seller_id) > 1
+    )
+
+- id: q18
+  lang: en
+  difficulty: hard
+  question: For 2017 and 2018, what were the top three product categories by revenue in each year? Use English names.
+  gold_sql: |
+    WITH yearly AS (
+        SELECT strftime('%Y', o.order_purchase_timestamp) AS year,
+               t.product_category_name_english AS category,
+               SUM(i.price) AS revenue
+        FROM order_items AS i
+        JOIN orders AS o ON o.order_id = i.order_id
+        JOIN products AS p ON p.product_id = i.product_id
+        JOIN category_translation AS t ON t.product_category_name = p.product_category_name
+        GROUP BY year, category
+    ),
+    ranked AS (
+        SELECT year, category, RANK() OVER (PARTITION BY year ORDER BY revenue DESC) AS rnk
+        FROM yearly
+        WHERE year IN ('2017', '2018')
+    )
+    SELECT year, category FROM ranked WHERE rnk <= 3
+
+- id: q19
+  lang: en
+  difficulty: hard
+  question: What share of the freight on delivered orders comes from interstate shipments, where the seller and the customer are in different states?
+  gold_sql: |
+    SELECT 100.0 * SUM(CASE WHEN s.seller_state <> c.customer_state THEN i.freight_value ELSE 0 END)
+           / SUM(i.freight_value)
+    FROM order_items AS i
+    JOIN orders AS o ON o.order_id = i.order_id
+    JOIN customers AS c ON c.customer_id = o.customer_id
+    JOIN sellers AS s ON s.seller_id = i.seller_id
+    WHERE o.order_status = 'delivered'
+
+- id: q20
+  lang: en
+  difficulty: hard
+  question: What is the median freight value per order item?
+  trap: SQLite has no MEDIAN() function.
+  gold_sql: |
+    WITH ordered AS (
+        SELECT freight_value,
+               ROW_NUMBER() OVER (ORDER BY freight_value) AS rn,
+               COUNT(*) OVER () AS n
+        FROM order_items
+    )
+    SELECT AVG(freight_value) FROM ordered WHERE rn IN ((n + 1) / 2, (n + 2) / 2)
+
+- id: q21
+  lang: en
+  difficulty: hard
+  question: What percentage of customers placed more than one order?
+  trap: Customers are people, so this needs customer_unique_id.
+  gold_sql: |
+    WITH per_person AS (
+        SELECT c.customer_unique_id, COUNT(DISTINCT o.order_id) AS orders
+        FROM customers AS c
+        JOIN orders AS o ON o.customer_id = c.customer_id
+        GROUP BY c.customer_unique_id
+    )
+    SELECT 100.0 * SUM(orders > 1) / COUNT(*) FROM per_person
+
+- id: q22
+  lang: en
+  difficulty: hard
+  question: Which three customer states have the longest average delivery time for delivered orders?
+  gold_sql: |
+    SELECT c.customer_state
+    FROM orders AS o
+    JOIN customers AS c ON c.customer_id = o.customer_id
+    WHERE o.order_status = 'delivered' AND o.order_delivered_customer_date IS NOT NULL
+    GROUP BY c.customer_state
+    ORDER BY AVG(julianday(o.order_delivered_customer_date) - julianday(o.order_purchase_timestamp)) DESC
+    LIMIT 3
+
+- id: q23
+  lang: en
+  difficulty: hard
+  question: Show the running total of orders placed in 2017, month by month.
+  gold_sql: |
+    WITH monthly AS (
+        SELECT strftime('%Y-%m', order_purchase_timestamp) AS month, COUNT(*) AS orders
+        FROM orders
+        WHERE strftime('%Y', order_purchase_timestamp) = '2017'
+        GROUP BY month
+    )
+    SELECT month, SUM(orders) OVER (ORDER BY month) AS running_total FROM monthly
+
+- id: q24
+  lang: en
+  difficulty: hard
+  question: Across all orders, what share of total revenue comes from the top 10% of sellers by revenue?
+  gold_sql: |
+    WITH seller_revenue AS (
+        SELECT seller_id, SUM(price) AS revenue FROM order_items GROUP BY seller_id
+    ),
+    deciles AS (
+        SELECT revenue, NTILE(10) OVER (ORDER BY revenue DESC) AS decile FROM seller_revenue
+    )
+    SELECT 100.0 * SUM(CASE WHEN decile = 1 THEN revenue ELSE 0 END) / SUM(revenue) FROM deciles
+
+- id: q25
+  lang: ja
+  difficulty: easy
+  question: 2018年に購入された注文は何件ですか？
+  gold_sql: SELECT COUNT(*) FROM orders WHERE strftime('%Y', order_purchase_timestamp) = '2018'
+
+- id: q26
+  lang: ja
+  difficulty: easy
+  question: 支払い方法ごとの支払い件数を、多い順に教えてください。
+  gold_sql: |
+    SELECT payment_type, COUNT(*) AS payments
+    FROM payments
+    GROUP BY payment_type
+    ORDER BY payments DESC
+
+- id: q27
+  lang: ja
+  difficulty: easy
+  question: 注文数が多い顧客の州を上位3つ教えてください。
+  gold_sql: |
+    SELECT c.customer_state
+    FROM orders AS o
+    JOIN customers AS c ON c.customer_id = o.customer_id
+    GROUP BY c.customer_state
+    ORDER BY COUNT(*) DESC
+    LIMIT 3
+
+- id: q28
+  lang: ja
+  difficulty: medium
+  question: 配達済みの注文について、注文ごとの送料合計の平均はいくらですか？
+  trap: Freight is per item, so it has to be summed per order before averaging.
+  gold_sql: |
+    SELECT AVG(order_freight)
+    FROM (
+        SELECT i.order_id, SUM(i.freight_value) AS order_freight
+        FROM order_items AS i
+        JOIN orders AS o ON o.order_id = i.order_id
+        WHERE o.order_status = 'delivered'
+        GROUP BY i.order_id
+    )
+
+- id: q29
+  lang: ja
+  difficulty: medium
+  question: レビュー評価が1のレビューは全体の何％ですか？
+  gold_sql: SELECT 100.0 * SUM(review_score = 1) / COUNT(*) FROM reviews
+
+- id: q30
+  lang: ja
+  difficulty: medium
+  question: 商品数が最も多いカテゴリーはどれですか？英語のカテゴリー名で答えてください。
+  gold_sql: |
+    SELECT t.product_category_name_english
+    FROM products AS p
+    JOIN category_translation AS t ON t.product_category_name = p.product_category_name
+    GROUP BY t.product_category_name_english
+    ORDER BY COUNT(*) DESC
+    LIMIT 1

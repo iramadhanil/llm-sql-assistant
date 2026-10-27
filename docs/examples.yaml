@@ -1,0 +1,82 @@
+# Worked examples the assistant can show the model. They cover different
+# metrics from the evaluation set, so they teach patterns without giving
+# away answers. Two examples are picked per question by keyword overlap.
+
+- question: Which three seller cities shipped the most items on delivered orders?
+  keywords: [seller, city, cities, deliver, items, 販売者, 都市]
+  sql: |
+    SELECT s.seller_city, COUNT(*) AS items
+    FROM order_items AS i
+    JOIN orders AS o ON o.order_id = i.order_id
+    JOIN sellers AS s ON s.seller_id = i.seller_id
+    WHERE o.order_status = 'delivered'
+    GROUP BY s.seller_city
+    ORDER BY items DESC
+    LIMIT 3
+
+- question: What was the revenue in each month of 2018?
+  keywords: [revenue, sales, month, monthly, 売上, 月]
+  sql: |
+    SELECT strftime('%Y-%m', o.order_purchase_timestamp) AS month,
+           SUM(i.price) AS revenue
+    FROM order_items AS i
+    JOIN orders AS o ON o.order_id = i.order_id
+    WHERE strftime('%Y', o.order_purchase_timestamp) = '2018'
+    GROUP BY month
+    ORDER BY month
+
+- question: How many sellers sold at least one item in the toys category?
+  keywords: [seller, category, categories, toys, カテゴリ, 販売者]
+  sql: |
+    SELECT COUNT(DISTINCT i.seller_id) AS sellers
+    FROM order_items AS i
+    JOIN products AS p ON p.product_id = i.product_id
+    JOIN category_translation AS t ON t.product_category_name = p.product_category_name
+    WHERE t.product_category_name_english = 'toys'
+
+- question: What is the average delivery time in days for orders paid with a voucher?
+  keywords: [delivery time, days, voucher, payment, 日数, 支払]
+  sql: |
+    SELECT AVG(julianday(o.order_delivered_customer_date) - julianday(o.order_purchase_timestamp)) AS avg_days
+    FROM orders AS o
+    WHERE o.order_status = 'delivered'
+      AND o.order_delivered_customer_date IS NOT NULL
+      AND o.order_id IN (SELECT order_id FROM payments WHERE payment_type = 'voucher')
+
+- question: How many people bought products from more than one category?
+  keywords: [people, customer, category, more than one, 顧客, カテゴリ]
+  sql: |
+    WITH person_categories AS (
+        SELECT c.customer_unique_id, COUNT(DISTINCT p.product_category_name) AS categories
+        FROM orders AS o
+        JOIN customers AS c ON c.customer_id = o.customer_id
+        JOIN order_items AS i ON i.order_id = o.order_id
+        JOIN products AS p ON p.product_id = i.product_id
+        GROUP BY c.customer_unique_id
+    )
+    SELECT COUNT(*) AS people
+    FROM person_categories
+    WHERE categories > 1
+
+- question: Rank sellers in the state of SP by number of delivered orders and show the top five.
+  keywords: [rank, top, seller, state, deliver, 順位, 上位]
+  sql: |
+    WITH seller_orders AS (
+        SELECT i.seller_id, COUNT(DISTINCT i.order_id) AS orders
+        FROM order_items AS i
+        JOIN orders AS o ON o.order_id = i.order_id
+        JOIN sellers AS s ON s.seller_id = i.seller_id
+        WHERE o.order_status = 'delivered' AND s.seller_state = 'SP'
+        GROUP BY i.seller_id
+    )
+    SELECT seller_id, orders, RANK() OVER (ORDER BY orders DESC) AS rank
+    FROM seller_orders
+    ORDER BY rank
+    LIMIT 5
+
+- question: What share of the total payment value was paid with vouchers?
+  keywords: [share, percentage, payment, voucher, 割合, 支払]
+  sql: |
+    SELECT 100.0 * SUM(CASE WHEN payment_type = 'voucher' THEN payment_value ELSE 0 END)
+           / SUM(payment_value) AS voucher_share_pct
+    FROM payments
